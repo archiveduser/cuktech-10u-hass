@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.components import bluetooth
 from homeassistant.helpers import selector
 from homeassistant.const import CONF_NAME
 from bleak.exc import BleakError
@@ -18,8 +20,12 @@ from .const import (
     CONF_TOKEN,
     DEFAULT_REFRESH_INTERVAL,
     DOMAIN,
+    FE95_SERVICE_UUID,
 )
-from .token_import import find_imported_devices, find_imported_tokens
+from .token_import import find_imported_tokens
+
+
+LIKELY_NAME_PARTS = ("cuktech", "njcuk", "fitting", "ad1204")
 
 
 def _clean_address(value: str) -> str:
@@ -41,6 +47,14 @@ def _validate_token(value: str) -> str:
     return token
 
 
+def _looks_like_charger(info: bluetooth.BluetoothServiceInfoBleak) -> bool:
+    service_uuids = {uuid.lower() for uuid in getattr(info, "service_uuids", [])}
+    if FE95_SERVICE_UUID in service_uuids:
+        return True
+    name = (info.name or "").lower()
+    return any(part in name for part in LIKELY_NAME_PARTS)
+
+
 class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
@@ -48,12 +62,12 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered: dict[str, str] = {}
 
     async def _async_collect_discovered(self) -> None:
-        storage_path = self.hass.config.path(".storage")
-        devices = await self.hass.async_add_executor_job(find_imported_devices, storage_path)
+        await bluetooth.async_request_active_scan(self.hass)
+        await asyncio.sleep(5)
         self._discovered = {
-            device.mac: device.name
-            for device in devices
-            if device.mac
+            info.address.upper(): info.name or info.address.upper()
+            for info in bluetooth.async_discovered_service_info(self.hass, connectable=True)
+            if _looks_like_charger(info)
         }
 
     async def _async_import_token_candidates(self, address: str) -> list[str]:
