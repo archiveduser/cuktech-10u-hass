@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.components import bluetooth
 from homeassistant.helpers import selector
 from homeassistant.const import CONF_NAME
 from bleak.exc import BleakError
@@ -20,12 +18,8 @@ from .const import (
     CONF_TOKEN,
     DEFAULT_REFRESH_INTERVAL,
     DOMAIN,
-    FE95_SERVICE_UUID,
 )
-from .token_import import find_imported_tokens
-
-
-LIKELY_NAME_PARTS = ("cuktech", "njcuk", "fitting", "ad1204")
+from .token_import import find_imported_devices, find_imported_tokens
 
 
 def _clean_address(value: str) -> str:
@@ -47,38 +41,20 @@ def _validate_token(value: str) -> str:
     return token
 
 
-def _looks_like_charger(info: bluetooth.BluetoothServiceInfoBleak) -> bool:
-    service_uuids = {uuid.lower() for uuid in getattr(info, "service_uuids", [])}
-    if FE95_SERVICE_UUID in service_uuids:
-        return True
-    name = (info.name or "").lower()
-    return any(part in name for part in LIKELY_NAME_PARTS)
-
-
 class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
         self._discovered: dict[str, str] = {}
-        self._default_address: str | None = None
 
     async def _async_collect_discovered(self) -> None:
-        await bluetooth.async_request_active_scan(self.hass)
-        await asyncio.sleep(5)
-        likely: dict[str, str] = {}
-        other: dict[str, str] = {}
-        for info in bluetooth.async_discovered_service_info(self.hass, connectable=True):
-            address = info.address.upper()
-            name = info.name or address
-            label = name
-            if _looks_like_charger(info):
-                likely[address] = label
-            else:
-                other[address] = label
-
-        # Show likely devices first, but fall back to all connectable BLE
-        # devices. Some AD1204 advertisements do not expose the FE95 UUID.
-        self._discovered.update(likely or other)
+        storage_path = self.hass.config.path(".storage")
+        devices = await self.hass.async_add_executor_job(find_imported_devices, storage_path)
+        self._discovered = {
+            device.mac: device.name
+            for device in devices
+            if device.mac
+        }
 
     async def _async_import_token_candidates(self, address: str) -> list[str]:
         storage_path = self.hass.config.path(".storage")
@@ -98,17 +74,6 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return token, firmware_version
         return None
 
-    async def async_step_bluetooth(self, discovery_info: bluetooth.BluetoothServiceInfoBleak) -> config_entries.FlowResult:
-        await self.async_set_unique_id(discovery_info.address)
-        self._abort_if_unique_id_configured()
-        self.context["title_placeholders"] = {
-            "name": discovery_info.name or discovery_info.address,
-        }
-        address = discovery_info.address.upper()
-        self._discovered[address] = discovery_info.name or address
-        self._default_address = address
-        return await self.async_step_user()
-
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> config_entries.FlowResult:
         errors: dict[str, str] = {}
 
@@ -119,7 +84,7 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             address: f"{name} ({address})" if name != address else address
             for address, name in sorted(self._discovered.items())
         }
-        default_address = self._default_address or next(iter(address_options), None)
+        default_address = next(iter(address_options), None)
 
         if user_input is not None:
             address = _clean_address(user_input[CONF_ADDRESS])

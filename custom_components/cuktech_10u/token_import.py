@@ -138,3 +138,15 @@ def find_imported_tokens(storage_path: str, address: str | None = None) -> list[
     for candidate in candidates:
         unique.setdefault(candidate.token, candidate)
     return list(unique.values())
+
+
+def find_imported_devices(storage_path: str) -> list[ImportedToken]:
+    storage = Path(storage_path)
+    candidates = _xiaomi_miot_candidates(storage, None)
+    candidates.extend(candidate for candidate in _xiaomi_home_candidates(storage) if candidate.mac)
+
+    unique: dict[str, ImportedToken] = {}
+    for candidate in candidates:
+        if candidate.mac:
+            unique.setdefault(candidate.mac, candidate)
+    return list(unique.values())

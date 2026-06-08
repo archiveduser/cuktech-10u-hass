@@ -1,12 +1,6 @@
 {
   "domain": "cuktech_10u",
   "name": "CUKTECH 10 Ultra",
-  "bluetooth": [
-    {
-      "service_uuid": "0000fe95-0000-1000-8000-00805f9b34fb",
-      "connectable": true
-    }
-  ],
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["bluetooth"],
