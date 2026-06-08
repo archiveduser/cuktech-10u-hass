@@ -1,5 +1,6 @@
 __pycache__/
 AGENTS.md
+DEVELOPMENT.md
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
