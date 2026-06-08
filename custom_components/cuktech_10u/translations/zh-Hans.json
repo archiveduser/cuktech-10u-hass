@@ -3,6 +3,7 @@
     "step": {
       "user": {
         "title": "CUKTECH 10 Ultra",
+        "description": "点击提交后将尝试连接到设备，请等待。",
         "data": {
           "address": "选择设备",
           "token": "设备Token",
