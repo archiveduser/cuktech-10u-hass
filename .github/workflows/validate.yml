@@ -1,0 +1,34 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate JSON
+        run: |
+          python -m json.tool hacs.json >/dev/null
+          python -m json.tool custom_components/cuktech_10u/manifest.json >/dev/null
+          python -m json.tool custom_components/cuktech_10u/strings.json >/dev/null
+          python -m json.tool custom_components/cuktech_10u/translations/en.json >/dev/null
+          python -m json.tool custom_components/cuktech_10u/translations/zh-Hans.json >/dev/null
+
+      - name: Compile Python
+        run: |
+          PYTHONPYCACHEPREFIX=/tmp/cuktech_10u_pycache python -m compileall -q custom_components/cuktech_10u

@@ -1,0 +1,6 @@
+{
+  "name": "CUKTECH 10 Ultra",
+  "domains": ["cuktech_10u"],
+  "homeassistant": "2026.3.0",
+  "render_readme": true
+}

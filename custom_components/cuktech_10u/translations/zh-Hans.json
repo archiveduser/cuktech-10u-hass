@@ -1,0 +1,60 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "CUKTECH 10 Ultra",
+        "data": {
+          "address": "选择设备",
+          "token": "设备Token",
+          "name": "设备名称"
+        },
+        "data_description": {
+          "token": "请输入设备token，留空时自动从xiaomi_home或xiaomi_miot插件的配置文件中读取。"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "这个充电器已经配置过。"
+    },
+    "error": {
+      "invalid_token": "Token 必须是 24 位十六进制字符。",
+      "token_import_failed": "没有找到可用的导入 token，请手动填写 token。",
+      "invalid_auth": "Mi auth token 校验失败，请确认 token 后重试。",
+      "cannot_connect": "无法连接充电器，请确认设备在线且在蓝牙范围内后重试。",
+      "unknown": "验证时发生未知错误，请查看日志后重试。"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "total_power": { "name": "总功率" },
+      "c1_power": { "name": "C1 功率" },
+      "c1_voltage": { "name": "C1 电压" },
+      "c1_current": { "name": "C1 电流" },
+      "c2_power": { "name": "C2 功率" },
+      "c2_voltage": { "name": "C2 电压" },
+      "c2_current": { "name": "C2 电流" },
+      "c3_power": { "name": "C3 功率" },
+      "c3_voltage": { "name": "C3 电压" },
+      "c3_current": { "name": "C3 电流" },
+      "a_power": { "name": "USB-A 功率" },
+      "a_voltage": { "name": "USB-A 电压" },
+      "a_current": { "name": "USB-A 电流" }
+    },
+    "binary_sensor": {
+      "c1_supplying_power": { "name": "C1 正在供电" },
+      "c2_supplying_power": { "name": "C2 正在供电" },
+      "c3_supplying_power": { "name": "C3 正在供电" },
+      "a_supplying_power": { "name": "USB-A 正在供电" }
+    },
+    "switch": {
+      "c1_enabled": { "name": "C1 输出" },
+      "c2_enabled": { "name": "C2 输出" },
+      "c3_enabled": { "name": "C3 输出" },
+      "a_enabled": { "name": "USB-A 输出" },
+      "usb_a_low_current": { "name": "USB-A 小电流" }
+    },
+    "select": {
+      "scene_mode": { "name": "充电场景" }
+    }
+  }
+}

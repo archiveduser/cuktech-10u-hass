@@ -1,0 +1,13 @@
+__pycache__/
+AGENTS.md
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.DS_Store
+.env
+.venv/
+venv/
+dist/
+*.zip
