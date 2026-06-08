@@ -21,12 +21,11 @@ from .const import (
     CONF_TOKEN,
     DEFAULT_REFRESH_INTERVAL,
     DOMAIN,
-    FE95_SERVICE_UUID,
 )
 from .token_import import find_imported_tokens
 
 
-LIKELY_NAME_PARTS = ("cuktech", "njcuk", "fitting", "ad1204")
+CHARGER_BLE_NAME = "njcuk.fitting.ad1204"
 MAC_HEX_RE = re.compile(r"^[0-9A-F]{12}$")
 
 
@@ -58,11 +57,7 @@ def _validate_token(value: str) -> str:
 
 
 def _looks_like_charger(info: bluetooth.BluetoothServiceInfoBleak) -> bool:
-    service_uuids = {uuid.lower() for uuid in getattr(info, "service_uuids", [])}
-    if FE95_SERVICE_UUID in service_uuids:
-        return True
-    name = (info.name or "").lower()
-    return any(part in name for part in LIKELY_NAME_PARTS)
+    return (info.name or "").strip().lower() == CHARGER_BLE_NAME
 
 
 class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
