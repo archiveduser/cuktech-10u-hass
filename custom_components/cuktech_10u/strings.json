@@ -9,6 +9,7 @@
           "name": "Device name"
         },
         "data_description": {
+          "address": "Select a scanned device or enter a Bluetooth MAC address manually.",
           "token": "Enter the device token. Leave empty to read it automatically from xiaomi_home or xiaomi_miot plugin configuration files."
         }
       }
@@ -17,6 +18,7 @@
       "already_configured": "This charger is already configured."
     },
     "error": {
+      "invalid_address": "Enter a valid Bluetooth MAC address.",
       "invalid_token": "Token must be 24 hex characters.",
       "token_import_failed": "No usable imported token was found. Enter the token manually.",
       "invalid_auth": "Mi auth token check failed. Verify the token and try again.",

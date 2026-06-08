@@ -26,7 +26,7 @@ Copy `custom_components/cuktech_10u` into your Home Assistant `config/custom_com
 
 1. Open `Settings -> Devices & services -> Add integration`.
 2. Search for `CUKTECH 10 Ultra`.
-3. Select the charger from the Bluetooth device list.
+3. Select a scanned device from the list, or enter the Bluetooth MAC address manually.
 4. Enter the device token, or leave it empty to read it automatically from `xiaomi_home` or `xiaomi_miot` plugin configuration files.
 5. Optionally set a device name.
 

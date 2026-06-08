@@ -9,6 +9,7 @@
           "name": "设备名称"
         },
         "data_description": {
+          "address": "可以选择扫描到的设备，也可以手动输入蓝牙 MAC 地址。",
           "token": "请输入设备token，留空时自动从xiaomi_home或xiaomi_miot插件的配置文件中读取。"
         }
       }
@@ -17,6 +18,7 @@
       "already_configured": "这个充电器已经配置过。"
     },
     "error": {
+      "invalid_address": "请输入有效的蓝牙 MAC 地址。",
       "invalid_token": "Token 必须是 24 位十六进制字符。",
       "token_import_failed": "没有找到可用的导入 token，请手动填写 token。",
       "invalid_auth": "Mi auth token 校验失败，请确认 token 后重试。",

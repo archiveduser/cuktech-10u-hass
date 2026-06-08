@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -26,10 +27,19 @@ from .token_import import find_imported_tokens
 
 
 LIKELY_NAME_PARTS = ("cuktech", "njcuk", "fitting", "ad1204")
+MAC_HEX_RE = re.compile(r"^[0-9A-F]{12}$")
 
 
 def _clean_address(value: str) -> str:
-    return value.strip().upper()
+    return value.replace("-", ":").strip().upper()
+
+
+def _validate_address(value: str) -> str:
+    address = _clean_address(value)
+    raw = address.replace(":", "")
+    if not MAC_HEX_RE.fullmatch(raw):
+        raise vol.Invalid("address must be a 12-character hex Bluetooth MAC")
+    return ":".join(raw[index : index + 2] for index in range(0, 12, 2))
 
 
 def _clean_token(value: str) -> str:
@@ -101,12 +111,18 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         default_address = next(iter(address_options), None)
 
         if user_input is not None:
-            address = _clean_address(user_input[CONF_ADDRESS])
+            try:
+                address = _validate_address(user_input[CONF_ADDRESS])
+            except vol.Invalid:
+                errors[CONF_ADDRESS] = "invalid_address"
+                address = ""
             token_input = user_input.get(CONF_TOKEN, "")
             token = ""
             firmware_version: str | None = None
 
-            if token_input:
+            if errors:
+                pass
+            elif token_input:
                 try:
                     token = _validate_token(token_input)
                 except vol.Invalid:
@@ -152,7 +168,16 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else vol.Required(CONF_ADDRESS)
         )
         schema_fields: dict[Any, Any] = {
-            address_field: vol.In(address_options) if address_options else str,
+            address_field: selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": address, "label": label}
+                        for address, label in address_options.items()
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    custom_value=True,
+                )
+            ),
             vol.Optional(CONF_TOKEN): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
             ),
