@@ -115,33 +115,32 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             token = ""
             firmware_version: str | None = None
 
-            if errors:
-                pass
-            elif token_input:
-                try:
-                    token = _validate_token(token_input)
-                except vol.Invalid:
-                    errors[CONF_TOKEN] = "invalid_token"
-                else:
-                    try:
-                        firmware_version = await async_validate_auth(self.hass, address, token)
-                    except CuktechAuthError:
-                        errors[CONF_TOKEN] = "invalid_auth"
-                    except (BleakOutOfConnectionSlotsError, BleakError, TimeoutError, RuntimeError):
-                        errors["base"] = "cannot_connect"
-                    except Exception:
-                        errors["base"] = "unknown"
-            else:
-                imported = await self._async_validate_imported_token(address)
-                if imported is None:
-                    errors[CONF_TOKEN] = "token_import_failed"
-                else:
-                    token, firmware_version = imported
-
             if not errors:
                 await self.async_set_unique_id(address)
                 self._abort_if_unique_id_configured()
 
+                if token_input:
+                    try:
+                        token = _validate_token(token_input)
+                    except vol.Invalid:
+                        errors[CONF_TOKEN] = "invalid_token"
+                    else:
+                        try:
+                            firmware_version = await async_validate_auth(self.hass, address, token)
+                        except CuktechAuthError:
+                            errors[CONF_TOKEN] = "invalid_auth"
+                        except (BleakOutOfConnectionSlotsError, BleakError, TimeoutError, RuntimeError):
+                            errors["base"] = "cannot_connect"
+                        except Exception:
+                            errors["base"] = "unknown"
+                else:
+                    imported = await self._async_validate_imported_token(address)
+                    if imported is None:
+                        errors[CONF_TOKEN] = "token_import_failed"
+                    else:
+                        token, firmware_version = imported
+
+            if not errors:
                 name = user_input.get(CONF_NAME) or self._discovered.get(address) or "CUKTECH 10 Ultra"
                 data = {
                     CONF_ADDRESS: address,
