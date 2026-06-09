@@ -6,8 +6,7 @@
         "description": "点击提交后将尝试连接到设备，请等待。",
         "data": {
           "address": "选择设备",
-          "token": "设备Token",
-          "name": "设备名称"
+          "token": "设备Token"
         },
         "data_description": {
           "address": "可以选择扫描到的设备，也可以手动输入蓝牙 MAC 地址。",

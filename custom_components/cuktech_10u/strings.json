@@ -6,8 +6,7 @@
         "description": "After clicking Submit, Home Assistant will try to connect to the device. Please wait.",
         "data": {
           "address": "Select device",
-          "token": "Device token",
-          "name": "Device name"
+          "token": "Device token"
         },
         "data_description": {
           "address": "Select a scanned device or enter a Bluetooth MAC address manually.",

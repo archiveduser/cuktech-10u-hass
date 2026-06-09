@@ -9,7 +9,6 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.helpers import selector
-from homeassistant.const import CONF_NAME
 from bleak.exc import BleakError
 from bleak_retry_connector import BleakOutOfConnectionSlotsError
 
@@ -20,6 +19,7 @@ from .const import (
     CONF_REFRESH_INTERVAL,
     CONF_TOKEN,
     DEFAULT_REFRESH_INTERVAL,
+    DEVICE_NAME,
     DOMAIN,
 )
 from .token_import import find_imported_tokens
@@ -58,6 +58,13 @@ def _validate_token(value: str) -> str:
 
 def _looks_like_charger(info: bluetooth.BluetoothServiceInfoBleak) -> bool:
     return (info.name or "").strip().lower() == CHARGER_BLE_NAME
+
+
+def _entry_title(address: str) -> str:
+    suffix = address.replace(":", "")[-4:]
+    if not suffix:
+        return DEVICE_NAME
+    return f"{DEVICE_NAME} ({suffix})"
 
 
 class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -141,7 +148,6 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         token, firmware_version = imported
 
             if not errors:
-                name = user_input.get(CONF_NAME) or self._discovered.get(address) or "CUKTECH 10 Ultra"
                 data = {
                     CONF_ADDRESS: address,
                     CONF_TOKEN: token,
@@ -149,7 +155,7 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if firmware_version:
                     data[CONF_FIRMWARE_VERSION] = firmware_version
                 return self.async_create_entry(
-                    title=name,
+                    title=_entry_title(address),
                     data=data,
                     options={
                         CONF_REFRESH_INTERVAL: DEFAULT_REFRESH_INTERVAL,
@@ -175,7 +181,6 @@ class Cuktech10UConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_TOKEN): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
             ),
-            vol.Optional(CONF_NAME): str,
         }
 
         return self.async_show_form(

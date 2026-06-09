@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 DOMAIN = "cuktech_10u"
+DEVICE_NAME = "CUKTECH 10 Ultra"
 
 CONF_ADDRESS = "address"
 CONF_TOKEN = "token"

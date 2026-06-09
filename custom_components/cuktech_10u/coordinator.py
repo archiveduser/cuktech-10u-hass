@@ -16,6 +16,7 @@ from .const import (
     CONF_REFRESH_INTERVAL,
     CONF_TOKEN,
     DEFAULT_REFRESH_INTERVAL,
+    DEVICE_NAME,
     DOMAIN,
     PORT_BITS,
     SCENE_MODE_OPTIONS,
@@ -98,7 +99,7 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
             connections={(CONNECTION_BLUETOOTH, self.address)},
             manufacturer="CUKTECH",
             model="10 Ultra",
-            name="CUKTECH 10 Ultra",
+            name=self.entry.title or DEVICE_NAME,
             sw_version=self.firmware_version,
         )
 
