@@ -507,7 +507,10 @@ class Cuktech10UClient:
                     if control_task in done:
                         command = control_task.result()
                         await self._async_send_control_command(pending_writes, state, command)
-                        await self._async_send_get_properties(pending_writes, state)
+                        # ESPHome Bluetooth Proxy can stop forwarding CMTP notifications
+                        # if a get-property request is sent immediately after a control write.
+                        # Keep this call here so it can be restored after proxy compatibility improves.
+                        # await self._async_send_get_properties(pending_writes, state)
                     elif self._refresh_interval > 0:
                         await self._async_send_get_properties(pending_writes, state)
             finally:
