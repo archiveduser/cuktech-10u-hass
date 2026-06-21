@@ -346,6 +346,7 @@ class Cuktech10UClient:
         upnp_status_event = asyncio.Event()
         greeting_event = asyncio.Event()
         disconnected_event = asyncio.Event()
+        update_event = asyncio.Event()
 
         state: dict[str, Any] = {
             "greeting_count": 0,
@@ -455,6 +456,7 @@ class Cuktech10UClient:
                                 ",".join(sorted(update.ports)),
                             )
                             self._update_callback(update)
+                            update_event.set()
 
             subscribed: list[str] = []
             loop = asyncio.get_running_loop()
@@ -514,11 +516,20 @@ class Cuktech10UClient:
                         break
                     if control_task in done:
                         command = control_task.result()
+                        update_event.clear()
                         await self._async_send_control_command(pending_writes, state, command)
                         _LOGGER.info(
                             "CUKTECH control command sent for %s; waiting for device push update",
                             self._address,
                         )
+                        try:
+                            await asyncio.wait_for(update_event.wait(), timeout=4)
+                        except asyncio.TimeoutError:
+                            _LOGGER.warning(
+                                "No CUKTECH push update after control for %s; reconnecting BLE session",
+                                self._address,
+                            )
+                            break
                     elif self._refresh_interval > 0:
                         await self._async_send_get_properties(pending_writes, state)
             finally:
