@@ -230,6 +230,12 @@ def _char_by_uuid(client: BleakClient, uuid: str) -> Any:
     raise RuntimeError(f"Characteristic {uuid} not found")
 
 
+async def _async_write_char(client: BleakClient, char: Any, value: bytes) -> None:
+    response = "write" in (getattr(char, "properties", None) or ())
+    await client.write_gatt_char(char, value, response=response)
+    await asyncio.sleep(0.08)
+
+
 def _decode_firmware_version(value: bytes) -> str | None:
     text = value.rstrip(b"\x00").decode("ascii", errors="ignore").strip()
     return text or None
@@ -371,8 +377,7 @@ class Cuktech10UClient:
             await self._async_read_firmware_version(client)
 
             async def write_name(name: str, value: bytes) -> None:
-                await client.write_gatt_char(chars[name], value, response=False)
-                await asyncio.sleep(0.08)
+                await _async_write_char(client, chars[name], value)
 
             async def writer_task() -> None:
                 while True:
@@ -502,12 +507,18 @@ class Cuktech10UClient:
                     )
                     for task in pending:
                         task.cancel()
+                    for task in pending:
+                        with suppress(asyncio.CancelledError):
+                            await task
                     if stop_task in done or stop_event.is_set() or disconnected_event.is_set() or not client.is_connected:
                         break
                     if control_task in done:
                         command = control_task.result()
                         await self._async_send_control_command(pending_writes, state, command)
-                        await self._async_send_get_properties(pending_writes, state)
+                        _LOGGER.info(
+                            "CUKTECH control command sent for %s; waiting for device push update",
+                            self._address,
+                        )
                     elif self._refresh_interval > 0:
                         await self._async_send_get_properties(pending_writes, state)
             finally:
@@ -550,8 +561,7 @@ class Cuktech10UClient:
         subscribe_upnp: Callable[[], Awaitable[None]],
     ) -> None:
         async def write_name(name: str, value: bytes) -> None:
-            await client.write_gatt_char(chars[name], value, response=False)
-            await asyncio.sleep(0.08)
+            await _async_write_char(client, chars[name], value)
 
         app_random = secrets.token_bytes(16)
 
@@ -724,8 +734,7 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
         await validator._async_read_firmware_version(client)
 
         async def write_name(name: str, value: bytes) -> None:
-            await client.write_gatt_char(chars[name], value, response=False)
-            await asyncio.sleep(0.08)
+            await _async_write_char(client, chars[name], value)
 
         async def writer_task() -> None:
             while True:
