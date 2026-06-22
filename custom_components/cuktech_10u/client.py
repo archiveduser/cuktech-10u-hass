@@ -506,8 +506,16 @@ class Cuktech10UClient:
 
             async def recover_cmtp_path() -> bool:
                 _LOGGER.warning("Trying CUKTECH CMTP recovery in current BLE session for %s", self._address)
+                update_event.clear()
                 with suppress(Exception):
                     await write_name("cmtp", bytes.fromhex("00000300"))
+
+                try:
+                    await asyncio.wait_for(update_event.wait(), timeout=1.0)
+                    _LOGGER.info("CUKTECH CMTP recovered by poke in current BLE session for %s", self._address)
+                    return True
+                except asyncio.TimeoutError:
+                    pass
 
                 await asyncio.sleep(0.3)
 
@@ -533,17 +541,21 @@ class Cuktech10UClient:
                         return False
                     update_event.clear()
                     await self._async_send_get_properties(send_vendor_frame, state)
-                    try:
-                        await asyncio.wait_for(update_event.wait(), timeout=5 + attempt * 2)
+                    if await self._async_wait_update_or_poke_cmtp(
+                        write_name,
+                        update_event,
+                        first_timeout=5 + attempt * 2,
+                        poke_timeout=1.5,
+                        attempts=1,
+                    ):
                         _LOGGER.info("CUKTECH CMTP recovered in current BLE session for %s", self._address)
                         return True
-                    except asyncio.TimeoutError:
-                        _LOGGER.debug(
-                            "CUKTECH CMTP recovery attempt %s failed for %s",
-                            attempt + 1,
-                            self._address,
-                        )
-                        await asyncio.sleep(1.0)
+                    _LOGGER.debug(
+                        "CUKTECH CMTP recovery attempt %s failed for %s",
+                        attempt + 1,
+                        self._address,
+                    )
+                    await asyncio.sleep(1.0)
                 return False
 
             try:
@@ -584,26 +596,46 @@ class Cuktech10UClient:
                         update_event.clear()
                         await self._async_send_control_command(send_vendor_frame, state, command)
                         _LOGGER.info(
-                            "CUKTECH control command sent for %s; requesting fresh properties",
+                            "CUKTECH control command sent for %s; waiting briefly for push update",
                             self._address,
                         )
-                        await asyncio.sleep(1.5)
+
+                        try:
+                            await asyncio.wait_for(update_event.wait(), timeout=0.8)
+                            continue
+                        except asyncio.TimeoutError:
+                            pass
+
+                        with suppress(Exception):
+                            await write_name("cmtp", bytes.fromhex("00000300"))
+
+                        try:
+                            await asyncio.wait_for(update_event.wait(), timeout=1.2)
+                            continue
+                        except asyncio.TimeoutError:
+                            pass
+
+                        _LOGGER.info(
+                            "No CUKTECH push after control for %s; requesting fresh properties",
+                            self._address,
+                        )
                         update_event.clear()
                         await self._async_send_get_properties(send_vendor_frame, state)
-                        try:
-                            await asyncio.wait_for(update_event.wait(), timeout=8)
-                        except asyncio.TimeoutError:
-                            _LOGGER.warning(
-                                "No CUKTECH update after control/get-property for %s; trying in-session recovery",
-                                self._address,
-                            )
-                            if await recover_cmtp_path():
-                                continue
-                            _LOGGER.warning(
-                                "CUKTECH in-session recovery failed for %s; keeping BLE session alive",
-                                self._address,
-                            )
+
+                        if await self._async_wait_update_or_poke_cmtp(write_name, update_event):
                             continue
+
+                        _LOGGER.warning(
+                            "No CUKTECH update after fast CMTP poke/get-property for %s; trying full in-session recovery",
+                            self._address,
+                        )
+                        if await recover_cmtp_path():
+                            continue
+                        _LOGGER.warning(
+                            "CUKTECH in-session recovery failed for %s; reconnecting BLE session",
+                            self._address,
+                        )
+                        break
                     elif self._refresh_interval > 0:
                         await self._async_send_get_properties(send_vendor_frame, state)
             finally:
@@ -628,6 +660,38 @@ class Cuktech10UClient:
         if version := _decode_firmware_version(bytes(value)):
             _LOGGER.info("Read CUKTECH firmware version for %s: %s", self._address, version)
             self._firmware_callback(version)
+
+    async def _async_wait_update_or_poke_cmtp(
+        self,
+        write_name: WriteCallback,
+        update_event: asyncio.Event,
+        *,
+        first_timeout: float = 1.5,
+        poke_timeout: float = 1.5,
+        attempts: int = 2,
+    ) -> bool:
+        for attempt in range(attempts):
+            try:
+                await asyncio.wait_for(
+                    update_event.wait(),
+                    timeout=first_timeout if attempt == 0 else poke_timeout,
+                )
+                return True
+            except asyncio.TimeoutError:
+                _LOGGER.debug(
+                    "No CUKTECH update yet for %s; poking CMTP channel attempt=%s",
+                    self._address,
+                    attempt + 1,
+                )
+                with suppress(Exception):
+                    await write_name("cmtp", bytes.fromhex("00000300"))
+                await asyncio.sleep(0.15)
+
+        try:
+            await asyncio.wait_for(update_event.wait(), timeout=1.5)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     async def _async_login(
         self,
