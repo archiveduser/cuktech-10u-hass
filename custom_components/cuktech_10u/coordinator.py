@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import logging
+from time import monotonic
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -24,6 +25,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_PORT_MASK_EXPECTED_TTL = 15.0
 
 
 class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
@@ -40,6 +42,8 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
         self.firmware_version: str | None = entry.data.get(CONF_FIRMWARE_VERSION)
         self._stop_event: asyncio.Event | None = None
         self._task: asyncio.Task[None] | None = None
+        self._expected_port_mask: int | None = None
+        self._expected_port_mask_until = 0.0
 
         self._client = Cuktech10UClient(
             hass=hass,
@@ -75,10 +79,11 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
 
     async def async_set_port_enabled(self, port: str, enabled: bool) -> None:
         bit = PORT_BITS[port]
-        current_mask = 0x0F
-        if self.data is not None:
-            current_mask = int(self.data.properties.get("port_ctl", current_mask)) & 0x0F
+        current_mask = self._current_port_mask()
         new_mask = (current_mask | bit) if enabled else (current_mask & ~bit)
+        self._expected_port_mask = new_mask
+        self._expected_port_mask_until = monotonic() + _PORT_MASK_EXPECTED_TTL
+        self._async_set_optimistic_property("port_ctl", new_mask)
         await self._client.async_set_port_mask(new_mask)
 
     async def async_set_usb_a_low_current(self, enabled: bool) -> None:
@@ -91,6 +96,22 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
         if self.data is None or USB_A_LOW_CURRENT_PROPERTY not in self.data.properties:
             return None
         return bool(self.data.properties[USB_A_LOW_CURRENT_PROPERTY])
+
+    def _current_port_mask(self) -> int:
+        if self._expected_port_mask is not None and monotonic() < self._expected_port_mask_until:
+            return self._expected_port_mask
+        current_mask = 0x0F
+        if self.data is not None:
+            current_mask = int(self.data.properties.get("port_ctl", current_mask)) & 0x0F
+        return current_mask
+
+    @callback
+    def _async_set_optimistic_property(self, name: str, value: int) -> None:
+        if self.data is None:
+            return
+        properties = dict(self.data.properties)
+        properties[name] = value
+        self.async_set_updated_data(replace(self.data, properties=properties))
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -124,7 +145,23 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
         ports: dict[str, PortReading] = dict(self.data.ports)
         ports.update(update.ports)
         properties = dict(self.data.properties)
-        properties.update(update.properties)
+        update_properties = dict(update.properties)
+        if "port_ctl" in update_properties:
+            incoming_mask = int(update_properties["port_ctl"]) & 0x0F
+            expected_mask = self._expected_port_mask
+            expected_active = expected_mask is not None and monotonic() < self._expected_port_mask_until
+            if expected_active and incoming_mask == 0 and expected_mask != 0:
+                _LOGGER.debug(
+                    "Ignoring CUKTECH port_ctl=0 while waiting for expected port mask 0x%x",
+                    expected_mask,
+                )
+                update_properties.pop("port_ctl")
+            else:
+                if expected_mask is not None:
+                    self._expected_port_mask = None
+                    self._expected_port_mask_until = 0.0
+                update_properties["port_ctl"] = incoming_mask
+        properties.update(update_properties)
         total = round(sum(port.power_est_w for port in ports.values()), 3)
         merged = replace(
             update,
