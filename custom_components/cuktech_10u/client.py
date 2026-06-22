@@ -27,6 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 UpdateCallback = Callable[["CuktechUpdate"], None]
 StatusCallback = Callable[[bool], None]
 FirmwareCallback = Callable[[str], None]
+WriteCallback = Callable[[str, bytes], Awaitable[None]]
 
 
 class CuktechAuthError(Exception):
@@ -231,7 +232,15 @@ def _char_by_uuid(client: BleakClient, uuid: str) -> Any:
 
 
 async def _async_write_char(client: BleakClient, char: Any, value: bytes) -> None:
-    response = "write" in (getattr(char, "properties", None) or ())
+    props = getattr(char, "properties", None) or ()
+    response = "write" in props
+    _LOGGER.debug(
+        "CUKTECH write uuid=%s props=%s response=%s value=%s",
+        char.uuid,
+        props,
+        response,
+        value.hex(),
+    )
     await client.write_gatt_char(char, value, response=response)
     await asyncio.sleep(0.08)
 
@@ -339,7 +348,6 @@ class Cuktech10UClient:
 
     async def _async_run_session(self, stop_event: asyncio.Event) -> None:
         target = await self._async_get_ble_device()
-        pending_writes: asyncio.Queue[tuple[str, bytes] | None] = asyncio.Queue()
         rcv_rdy_event = asyncio.Event()
         dev_random_event = asyncio.Event()
         dev_info_event = asyncio.Event()
@@ -376,25 +384,19 @@ class Cuktech10UClient:
         try:
             chars = {name: _char_by_uuid(client, uuid) for name, uuid in UUIDS.items()}
             await self._async_read_firmware_version(client)
+            write_lock = asyncio.Lock()
 
             async def write_name(name: str, value: bytes) -> None:
-                await _async_write_char(client, chars[name], value)
-
-            async def writer_task() -> None:
-                while True:
-                    item = await pending_writes.get()
-                    if item is None:
-                        return
-                    await write_name(*item)
-
-            writer = asyncio.create_task(writer_task())
+                async with write_lock:
+                    await _async_write_char(client, chars[name], value)
 
             async def on_notify(name: str, _sender: Any, data: bytearray) -> None:
                 value = bytes(data)
+                _LOGGER.debug("CUKTECH notify %s: %s", name, value.hex())
                 if name == "avdtp" and value.startswith(bytes.fromhex("000004")):
                     state["greeting_count"] += 1
                     greeting_event.set()
-                    await pending_writes.put(("avdtp", bytes.fromhex("000005") + value[3:]))
+                    await write_name("avdtp", bytes.fromhex("000005") + value[3:])
                 elif name == "avdtp" and value == bytes.fromhex("00000101"):
                     state["rcv_rdy_count"] += 1
                     rcv_rdy_event.set()
@@ -402,12 +404,12 @@ class Cuktech10UClient:
                     state["parcel_kind"] = 0x0D
                     state["parcel_expected_frames"] = value[4] + value[5] * 0x100
                     state["parcel_data"] = bytearray()
-                    await pending_writes.put(("avdtp", bytes.fromhex("00000101")))
+                    await write_name("avdtp", bytes.fromhex("00000101"))
                 elif name == "avdtp" and value.startswith(bytes.fromhex("0000000c")) and len(value) >= 6:
                     state["parcel_kind"] = 0x0C
                     state["parcel_expected_frames"] = value[4] + value[5] * 0x100
                     state["parcel_data"] = bytearray()
-                    await pending_writes.put(("avdtp", bytes.fromhex("00000101")))
+                    await write_name("avdtp", bytes.fromhex("00000101"))
                 elif (
                     name == "avdtp"
                     and state["parcel_kind"] is not None
@@ -426,20 +428,20 @@ class Cuktech10UClient:
                         state["parcel_kind"] = None
                         state["parcel_expected_frames"] = 0
                         state["parcel_data"] = bytearray()
-                        await pending_writes.put(("avdtp", bytes.fromhex("00000300")))
+                        await write_name("avdtp", bytes.fromhex("00000300"))
                 elif name == "avdtp" and value.startswith(bytes.fromhex("0000020d")):
                     state["dev_random"] = value[4:]
                     dev_random_event.set()
-                    await pending_writes.put(("avdtp", bytes.fromhex("00000300")))
+                    await write_name("avdtp", bytes.fromhex("00000300"))
                 elif name == "avdtp" and value.startswith(bytes.fromhex("0000020c")):
                     state["dev_info"] = value[4:]
                     dev_info_event.set()
-                    await pending_writes.put(("avdtp", bytes.fromhex("00000300")))
+                    await write_name("avdtp", bytes.fromhex("00000300"))
                 elif name == "upnp":
                     state["upnp_status"] = value
                     upnp_status_event.set()
                 elif name == "cmtp" and value.startswith(bytes.fromhex("000002")):
-                    await pending_writes.put(("cmtp", bytes.fromhex("00000300")))
+                    await write_name("cmtp", bytes.fromhex("00000300"))
                     keys = state["session_keys"]
                     if keys and len(value) > 10:
                         counter = int.from_bytes(value[4:6], "little")
@@ -484,9 +486,7 @@ class Cuktech10UClient:
                     await subscribe_name(name)
 
                 await self._async_login(
-                    client,
-                    chars,
-                    pending_writes,
+                    write_name,
                     state,
                     greeting_event,
                     rcv_rdy_event,
@@ -497,7 +497,7 @@ class Cuktech10UClient:
                 )
                 self._status_callback(True)
                 _LOGGER.info("CUKTECH BLE login succeeded for %s", self._address)
-                await self._async_send_get_properties(pending_writes, state)
+                await self._async_send_get_properties(write_name, state)
 
                 while not stop_event.is_set() and not disconnected_event.is_set() and client.is_connected:
                     stop_task = asyncio.create_task(stop_event.wait())
@@ -517,25 +517,24 @@ class Cuktech10UClient:
                     if control_task in done:
                         command = control_task.result()
                         update_event.clear()
-                        await self._async_send_control_command(pending_writes, state, command)
+                        await self._async_send_control_command(write_name, state, command)
                         _LOGGER.info(
-                            "CUKTECH control command sent for %s; waiting for device push update",
+                            "CUKTECH control command sent for %s; requesting fresh properties",
                             self._address,
                         )
+                        await asyncio.sleep(0.8)
+                        await self._async_send_get_properties(write_name, state)
                         try:
-                            await asyncio.wait_for(update_event.wait(), timeout=4)
+                            await asyncio.wait_for(update_event.wait(), timeout=6)
                         except asyncio.TimeoutError:
                             _LOGGER.warning(
-                                "No CUKTECH push update after control for %s; reconnecting BLE session",
+                                "No CUKTECH update after control/get-property for %s; reconnecting BLE session",
                                 self._address,
                             )
                             break
                     elif self._refresh_interval > 0:
-                        await self._async_send_get_properties(pending_writes, state)
+                        await self._async_send_get_properties(write_name, state)
             finally:
-                await pending_writes.put(None)
-                with suppress(Exception):
-                    await writer
                 for name in subscribed:
                     try:
                         await client.stop_notify(chars[name])
@@ -560,9 +559,7 @@ class Cuktech10UClient:
 
     async def _async_login(
         self,
-        client: BleakClient,
-        chars: dict[str, Any],
-        pending_writes: asyncio.Queue[tuple[str, bytes] | None],
+        write_name: WriteCallback,
         state: dict[str, Any],
         greeting_event: asyncio.Event,
         rcv_rdy_event: asyncio.Event,
@@ -571,9 +568,6 @@ class Cuktech10UClient:
         upnp_status_event: asyncio.Event,
         subscribe_upnp: Callable[[], Awaitable[None]],
     ) -> None:
-        async def write_name(name: str, value: bytes) -> None:
-            await _async_write_char(client, chars[name], value)
-
         app_random = secrets.token_bytes(16)
 
         await write_name("vendor_1c", bytes.fromhex("00"))
@@ -645,7 +639,7 @@ class Cuktech10UClient:
 
     async def _async_send_get_properties(
         self,
-        pending_writes: asyncio.Queue[tuple[str, bytes] | None],
+        write_name: WriteCallback,
         state: dict[str, Any],
     ) -> None:
         keys = state["session_keys"]
@@ -660,11 +654,11 @@ class Cuktech10UClient:
             plaintext = bytes([0x33, 0x20, (counter + 2) & 0xFF, 0x00]) + MIOT_GET_PROPS_BODY
             frames = [_encrypt_vendor_frame(keys, counter, plaintext)]
         for frame in frames:
-            await self._async_send_vendor_frame(pending_writes, frame)
+            await self._async_send_vendor_frame(write_name, frame)
 
     async def _async_send_control_command(
         self,
-        pending_writes: asyncio.Queue[tuple[str, bytes] | None],
+        write_name: WriteCallback,
         state: dict[str, Any],
         command: ControlCommand,
     ) -> None:
@@ -673,7 +667,7 @@ class Cuktech10UClient:
             counter = state["next_counter"]
             state["next_counter"] += 1
             frame = _encrypt_vendor_frame(keys, counter, _build_pre_control_plaintext(counter))
-            await self._async_send_vendor_frame(pending_writes, frame)
+            await self._async_send_vendor_frame(write_name, frame)
             state["pre_control_sent"] = True
 
         counter = state["next_counter"]
@@ -689,16 +683,16 @@ class Cuktech10UClient:
             command.value,
             self._address,
         )
-        await self._async_send_vendor_frame(pending_writes, frame)
+        await self._async_send_vendor_frame(write_name, frame)
 
     async def _async_send_vendor_frame(
         self,
-        pending_writes: asyncio.Queue[tuple[str, bytes] | None],
+        write_name: WriteCallback,
         frame: bytes,
     ) -> None:
-        await pending_writes.put(("vendor_1a", bytes.fromhex("000000000100")))
+        await write_name("vendor_1a", bytes.fromhex("000000000100"))
         await asyncio.sleep(0.25)
-        await pending_writes.put(("vendor_1a", frame))
+        await write_name("vendor_1a", frame)
         await asyncio.sleep(0.5)
 
 
@@ -720,7 +714,6 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
         firmware_callback=firmware_callback,
     )
     target = await validator._async_get_ble_device()
-    pending_writes: asyncio.Queue[tuple[str, bytes] | None] = asyncio.Queue()
     rcv_rdy_event = asyncio.Event()
     dev_random_event = asyncio.Event()
     dev_info_event = asyncio.Event()
@@ -743,25 +736,19 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
     try:
         chars = {name: _char_by_uuid(client, uuid) for name, uuid in UUIDS.items()}
         await validator._async_read_firmware_version(client)
+        write_lock = asyncio.Lock()
 
         async def write_name(name: str, value: bytes) -> None:
-            await _async_write_char(client, chars[name], value)
-
-        async def writer_task() -> None:
-            while True:
-                item = await pending_writes.get()
-                if item is None:
-                    return
-                await write_name(*item)
-
-        writer = asyncio.create_task(writer_task())
+            async with write_lock:
+                await _async_write_char(client, chars[name], value)
 
         async def on_notify(name: str, _sender: Any, data: bytearray) -> None:
             value = bytes(data)
+            _LOGGER.debug("CUKTECH validation notify %s: %s", name, value.hex())
             if name == "avdtp" and value.startswith(bytes.fromhex("000004")):
                 state["greeting_count"] += 1
                 greeting_event.set()
-                await pending_writes.put(("avdtp", bytes.fromhex("000005") + value[3:]))
+                await write_name("avdtp", bytes.fromhex("000005") + value[3:])
             elif name == "avdtp" and value == bytes.fromhex("00000101"):
                 state["rcv_rdy_count"] += 1
                 rcv_rdy_event.set()
@@ -769,12 +756,12 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
                 state["parcel_kind"] = 0x0D
                 state["parcel_expected_frames"] = value[4] + value[5] * 0x100
                 state["parcel_data"] = bytearray()
-                await pending_writes.put(("avdtp", bytes.fromhex("00000101")))
+                await write_name("avdtp", bytes.fromhex("00000101"))
             elif name == "avdtp" and value.startswith(bytes.fromhex("0000000c")) and len(value) >= 6:
                 state["parcel_kind"] = 0x0C
                 state["parcel_expected_frames"] = value[4] + value[5] * 0x100
                 state["parcel_data"] = bytearray()
-                await pending_writes.put(("avdtp", bytes.fromhex("00000101")))
+                await write_name("avdtp", bytes.fromhex("00000101"))
             elif (
                 name == "avdtp"
                 and state["parcel_kind"] is not None
@@ -793,15 +780,15 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
                     state["parcel_kind"] = None
                     state["parcel_expected_frames"] = 0
                     state["parcel_data"] = bytearray()
-                    await pending_writes.put(("avdtp", bytes.fromhex("00000300")))
+                    await write_name("avdtp", bytes.fromhex("00000300"))
             elif name == "avdtp" and value.startswith(bytes.fromhex("0000020d")):
                 state["dev_random"] = value[4:]
                 dev_random_event.set()
-                await pending_writes.put(("avdtp", bytes.fromhex("00000300")))
+                await write_name("avdtp", bytes.fromhex("00000300"))
             elif name == "avdtp" and value.startswith(bytes.fromhex("0000020c")):
                 state["dev_info"] = value[4:]
                 dev_info_event.set()
-                await pending_writes.put(("avdtp", bytes.fromhex("00000300")))
+                await write_name("avdtp", bytes.fromhex("00000300"))
             elif name == "upnp":
                 state["upnp_status"] = value
                 upnp_status_event.set()
@@ -831,9 +818,7 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
             for name in ("cmtp", "vendor_1a", "vendor_1c", "avdtp"):
                 await subscribe_name(name)
             await validator._async_login(
-                client,
-                chars,
-                pending_writes,
+                write_name,
                 state,
                 greeting_event,
                 rcv_rdy_event,
@@ -845,9 +830,6 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
             _LOGGER.info("CUKTECH BLE config validation succeeded for %s", address)
             return firmware_version
         finally:
-            await pending_writes.put(None)
-            with suppress(Exception):
-                await writer
             for name in subscribed:
                 with suppress(Exception):
                     await client.stop_notify(chars[name])
