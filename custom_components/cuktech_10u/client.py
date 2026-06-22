@@ -28,6 +28,7 @@ UpdateCallback = Callable[["CuktechUpdate"], None]
 StatusCallback = Callable[[bool], None]
 FirmwareCallback = Callable[[str], None]
 WriteCallback = Callable[[str, bytes], Awaitable[None]]
+VendorFrameCallback = Callable[[bytes], Awaitable[None]]
 
 
 class CuktechAuthError(Exception):
@@ -355,6 +356,8 @@ class Cuktech10UClient:
         greeting_event = asyncio.Event()
         disconnected_event = asyncio.Event()
         update_event = asyncio.Event()
+        vendor_ready_event = asyncio.Event()
+        vendor_done_event = asyncio.Event()
 
         state: dict[str, Any] = {
             "greeting_count": 0,
@@ -369,6 +372,8 @@ class Cuktech10UClient:
             "parcel_kind": None,
             "parcel_expected_frames": 0,
             "parcel_data": bytearray(),
+            "vendor_ready_event": vendor_ready_event,
+            "vendor_done_event": vendor_done_event,
         }
 
         def disconnected_callback(_client: BleakClient) -> None:
@@ -384,16 +389,30 @@ class Cuktech10UClient:
         try:
             chars = {name: _char_by_uuid(client, uuid) for name, uuid in UUIDS.items()}
             await self._async_read_firmware_version(client)
-            write_lock = asyncio.Lock()
+            protocol_lock = asyncio.Lock()
+
+            async def write_name_unlocked(name: str, value: bytes) -> None:
+                await _async_write_char(client, chars[name], value)
 
             async def write_name(name: str, value: bytes) -> None:
-                async with write_lock:
-                    await _async_write_char(client, chars[name], value)
+                async with protocol_lock:
+                    await write_name_unlocked(name, value)
+
+            async def send_vendor_frame(frame: bytes) -> None:
+                async with protocol_lock:
+                    await self._async_send_vendor_frame(write_name_unlocked, state, frame)
 
             async def on_notify(name: str, _sender: Any, data: bytearray) -> None:
                 value = bytes(data)
                 _LOGGER.debug("CUKTECH notify %s: %s", name, value.hex())
-                if name == "avdtp" and value.startswith(bytes.fromhex("000004")):
+                if name == "vendor_1a":
+                    if value == bytes.fromhex("00000101"):
+                        vendor_ready_event.set()
+                    elif value == bytes.fromhex("00000100"):
+                        vendor_done_event.set()
+                    else:
+                        _LOGGER.debug("CUKTECH vendor_1a status for %s: %s", self._address, value.hex())
+                elif name == "avdtp" and value.startswith(bytes.fromhex("000004")):
                     state["greeting_count"] += 1
                     greeting_event.set()
                     await write_name("avdtp", bytes.fromhex("000005") + value[3:])
@@ -469,7 +488,7 @@ class Cuktech10UClient:
                 if exc := task.exception():
                     _LOGGER.debug("CUKTECH BLE notify handler failed: %s", exc, exc_info=True)
 
-            async def subscribe_name(name: str) -> None:
+            def make_notify_callback(name: str) -> Callable[[Any, bytearray], None]:
                 def notify_callback(sender: Any, data: bytearray, n: str = name) -> None:
                     def schedule_notify() -> None:
                         task = asyncio.create_task(on_notify(n, sender, data))
@@ -477,9 +496,55 @@ class Cuktech10UClient:
 
                     loop.call_soon_threadsafe(schedule_notify)
 
-                await client.start_notify(chars[name], notify_callback)
-                subscribed.append(name)
+                return notify_callback
+
+            async def subscribe_name(name: str) -> None:
+                await client.start_notify(chars[name], make_notify_callback(name))
+                if name not in subscribed:
+                    subscribed.append(name)
                 await asyncio.sleep(0.05)
+
+            async def recover_cmtp_path() -> bool:
+                _LOGGER.warning("Trying CUKTECH CMTP recovery in current BLE session for %s", self._address)
+                with suppress(Exception):
+                    await write_name("cmtp", bytes.fromhex("00000300"))
+
+                await asyncio.sleep(0.3)
+
+                with suppress(Exception):
+                    await client.stop_notify(chars["cmtp"])
+                await asyncio.sleep(0.3)
+
+                try:
+                    await client.start_notify(chars["cmtp"], make_notify_callback("cmtp"))
+                except Exception as exc:
+                    _LOGGER.warning(
+                        "Failed to restart CUKTECH CMTP notify for %s: %s",
+                        self._address,
+                        exc,
+                        exc_info=True,
+                    )
+                    return False
+
+                await asyncio.sleep(0.5)
+
+                for attempt in range(3):
+                    if stop_event.is_set() or disconnected_event.is_set() or not client.is_connected:
+                        return False
+                    update_event.clear()
+                    await self._async_send_get_properties(send_vendor_frame, state)
+                    try:
+                        await asyncio.wait_for(update_event.wait(), timeout=5 + attempt * 2)
+                        _LOGGER.info("CUKTECH CMTP recovered in current BLE session for %s", self._address)
+                        return True
+                    except asyncio.TimeoutError:
+                        _LOGGER.debug(
+                            "CUKTECH CMTP recovery attempt %s failed for %s",
+                            attempt + 1,
+                            self._address,
+                        )
+                        await asyncio.sleep(1.0)
+                return False
 
             try:
                 for name in ("cmtp", "vendor_1a", "vendor_1c", "avdtp"):
@@ -497,7 +562,7 @@ class Cuktech10UClient:
                 )
                 self._status_callback(True)
                 _LOGGER.info("CUKTECH BLE login succeeded for %s", self._address)
-                await self._async_send_get_properties(write_name, state)
+                await self._async_send_get_properties(send_vendor_frame, state)
 
                 while not stop_event.is_set() and not disconnected_event.is_set() and client.is_connected:
                     stop_task = asyncio.create_task(stop_event.wait())
@@ -517,23 +582,30 @@ class Cuktech10UClient:
                     if control_task in done:
                         command = control_task.result()
                         update_event.clear()
-                        await self._async_send_control_command(write_name, state, command)
+                        await self._async_send_control_command(send_vendor_frame, state, command)
                         _LOGGER.info(
                             "CUKTECH control command sent for %s; requesting fresh properties",
                             self._address,
                         )
-                        await asyncio.sleep(0.8)
-                        await self._async_send_get_properties(write_name, state)
+                        await asyncio.sleep(1.5)
+                        update_event.clear()
+                        await self._async_send_get_properties(send_vendor_frame, state)
                         try:
-                            await asyncio.wait_for(update_event.wait(), timeout=6)
+                            await asyncio.wait_for(update_event.wait(), timeout=8)
                         except asyncio.TimeoutError:
                             _LOGGER.warning(
-                                "No CUKTECH update after control/get-property for %s; reconnecting BLE session",
+                                "No CUKTECH update after control/get-property for %s; trying in-session recovery",
                                 self._address,
                             )
-                            break
+                            if await recover_cmtp_path():
+                                continue
+                            _LOGGER.warning(
+                                "CUKTECH in-session recovery failed for %s; keeping BLE session alive",
+                                self._address,
+                            )
+                            continue
                     elif self._refresh_interval > 0:
-                        await self._async_send_get_properties(write_name, state)
+                        await self._async_send_get_properties(send_vendor_frame, state)
             finally:
                 for name in subscribed:
                     try:
@@ -639,7 +711,7 @@ class Cuktech10UClient:
 
     async def _async_send_get_properties(
         self,
-        write_name: WriteCallback,
+        send_vendor_frame: VendorFrameCallback,
         state: dict[str, Any],
     ) -> None:
         keys = state["session_keys"]
@@ -654,11 +726,11 @@ class Cuktech10UClient:
             plaintext = bytes([0x33, 0x20, (counter + 2) & 0xFF, 0x00]) + MIOT_GET_PROPS_BODY
             frames = [_encrypt_vendor_frame(keys, counter, plaintext)]
         for frame in frames:
-            await self._async_send_vendor_frame(write_name, frame)
+            await send_vendor_frame(frame)
 
     async def _async_send_control_command(
         self,
-        write_name: WriteCallback,
+        send_vendor_frame: VendorFrameCallback,
         state: dict[str, Any],
         command: ControlCommand,
     ) -> None:
@@ -667,7 +739,7 @@ class Cuktech10UClient:
             counter = state["next_counter"]
             state["next_counter"] += 1
             frame = _encrypt_vendor_frame(keys, counter, _build_pre_control_plaintext(counter))
-            await self._async_send_vendor_frame(write_name, frame)
+            await send_vendor_frame(frame)
             state["pre_control_sent"] = True
 
         counter = state["next_counter"]
@@ -683,17 +755,39 @@ class Cuktech10UClient:
             command.value,
             self._address,
         )
-        await self._async_send_vendor_frame(write_name, frame)
+        await send_vendor_frame(frame)
 
     async def _async_send_vendor_frame(
         self,
         write_name: WriteCallback,
+        state: dict[str, Any],
         frame: bytes,
     ) -> None:
+        vendor_ready_event: asyncio.Event = state["vendor_ready_event"]
+        vendor_done_event: asyncio.Event = state["vendor_done_event"]
+
+        vendor_ready_event.clear()
+        vendor_done_event.clear()
         await write_name("vendor_1a", bytes.fromhex("000000000100"))
-        await asyncio.sleep(0.25)
+
+        try:
+            await asyncio.wait_for(vendor_ready_event.wait(), timeout=1.5)
+        except asyncio.TimeoutError:
+            _LOGGER.debug(
+                "Timed out waiting for CUKTECH vendor ready for %s; sending frame anyway",
+                self._address,
+            )
+
+        await asyncio.sleep(0.05)
+        vendor_done_event.clear()
         await write_name("vendor_1a", frame)
-        await asyncio.sleep(0.5)
+
+        try:
+            await asyncio.wait_for(vendor_done_event.wait(), timeout=2.5)
+        except asyncio.TimeoutError:
+            _LOGGER.debug("Timed out waiting for CUKTECH vendor done ACK for %s", self._address)
+
+        await asyncio.sleep(0.2)
 
 
 async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str) -> str | None:
