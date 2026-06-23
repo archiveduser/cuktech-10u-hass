@@ -23,6 +23,7 @@ from homeassistant.util.dt import utcnow
 from .const import FIRMWARE_VERSION_UUID, MIOT_GET_PROPS_BODY, PORT_NAMES, PROPERTY_NAMES, UUIDS
 
 _LOGGER = logging.getLogger(__name__)
+_LOG_HEX_BYTES = 24
 
 UpdateCallback = Callable[["CuktechUpdate"], None]
 StatusCallback = Callable[[bool], None]
@@ -232,15 +233,28 @@ def _char_by_uuid(client: BleakClient, uuid: str) -> Any:
     raise RuntimeError(f"Characteristic {uuid} not found")
 
 
-async def _async_write_char(client: BleakClient, char: Any, value: bytes) -> None:
+def _format_bytes(value: bytes, limit: int = _LOG_HEX_BYTES) -> str:
+    if len(value) <= limit:
+        return value.hex()
+    head_len = limit // 2
+    tail_len = limit - head_len
+    return f"{value[:head_len].hex()}...{value[-tail_len:].hex()}"
+
+
+def _format_property_debug(piid: int, value: int) -> str:
+    return f"piid={piid} property={PROPERTY_NAMES.get(piid, 'unknown')} value={value}"
+
+
+async def _async_write_char(client: BleakClient, char: Any, value: bytes, name: str | None = None) -> None:
     props = getattr(char, "properties", None) or ()
     response = "write" in props
     _LOGGER.debug(
-        "CUKTECH write uuid=%s props=%s response=%s value=%s",
+        "CUKTECH write %s uuid=%s len=%s response=%s value=%s",
+        name or "unknown",
         char.uuid,
-        props,
+        len(value),
         response,
-        value.hex(),
+        _format_bytes(value),
     )
     await client.write_gatt_char(char, value, response=response)
     await asyncio.sleep(0.08)
@@ -281,6 +295,14 @@ class Cuktech10UClient:
         marker: bytes = bytes.fromhex("0110"),
         pre_control: bool = False,
     ) -> None:
+        _LOGGER.debug(
+            "Queued CUKTECH control for %s: %s marker=%s pre_control=%s queue_size=%s",
+            self._address,
+            _format_property_debug(piid, value),
+            marker.hex(),
+            pre_control,
+            self._control_queue.qsize(),
+        )
         await self._control_queue.put(ControlCommand(piid=piid, value=value, marker=marker, pre_control=pre_control))
 
     async def async_run(self, stop_event: asyncio.Event) -> None:
@@ -392,7 +414,7 @@ class Cuktech10UClient:
             protocol_lock = asyncio.Lock()
 
             async def write_name_unlocked(name: str, value: bytes) -> None:
-                await _async_write_char(client, chars[name], value)
+                await _async_write_char(client, chars[name], value, name)
 
             async def write_name(name: str, value: bytes) -> None:
                 async with protocol_lock:
@@ -404,7 +426,7 @@ class Cuktech10UClient:
 
             async def on_notify(name: str, _sender: Any, data: bytearray) -> None:
                 value = bytes(data)
-                _LOGGER.debug("CUKTECH notify %s: %s", name, value.hex())
+                _LOGGER.debug("CUKTECH notify %s len=%s value=%s", name, len(value), _format_bytes(value))
                 if name == "vendor_1a":
                     if value == bytes.fromhex("00000101"):
                         vendor_ready_event.set()
@@ -470,7 +492,7 @@ class Cuktech10UClient:
                             _LOGGER.debug("Failed to decrypt CMTP payload: %s", exc, exc_info=True)
                             return
                         if update := parse_miot_payload(self._address, plaintext):
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Received CUKTECH update for %s: total=%sW ports=%s",
                                 self._address,
                                 update.total_power_w,
@@ -593,6 +615,14 @@ class Cuktech10UClient:
                         break
                     if control_task in done:
                         command = control_task.result()
+                        _LOGGER.debug(
+                            "Processing CUKTECH control for %s: %s marker=%s pre_control=%s pending_controls=%s",
+                            self._address,
+                            _format_property_debug(command.piid, command.value),
+                            command.marker.hex(),
+                            command.pre_control,
+                            self._control_queue.qsize(),
+                        )
                         update_event.clear()
                         await self._async_send_control_command(send_vendor_frame, state, command)
                         _LOGGER.info(
@@ -779,16 +809,25 @@ class Cuktech10UClient:
         state: dict[str, Any],
     ) -> None:
         keys = state["session_keys"]
-        _LOGGER.info("Sending encrypted CUKTECH MIOT get-property request for %s", self._address)
         if not state["initial_get_props_sent"]:
             frames = _build_get_prop_frames(keys)
             state["initial_get_props_sent"] = True
             state["next_counter"] = max(state["next_counter"], 8)
+            _LOGGER.debug(
+                "Sending initial CUKTECH MIOT get-property request for %s frames=%s",
+                self._address,
+                len(frames),
+            )
         else:
             counter = state["next_counter"]
             state["next_counter"] += 1
             plaintext = bytes([0x33, 0x20, (counter + 2) & 0xFF, 0x00]) + MIOT_GET_PROPS_BODY
             frames = [_encrypt_vendor_frame(keys, counter, plaintext)]
+            _LOGGER.debug(
+                "Sending CUKTECH MIOT get-property request for %s counter=%s",
+                self._address,
+                counter,
+            )
         for frame in frames:
             await send_vendor_frame(frame)
 
@@ -802,6 +841,7 @@ class Cuktech10UClient:
         if command.pre_control and not state["pre_control_sent"]:
             counter = state["next_counter"]
             state["next_counter"] += 1
+            _LOGGER.debug("Sending CUKTECH pre-control frame for %s counter=%s", self._address, counter)
             frame = _encrypt_vendor_frame(keys, counter, _build_pre_control_plaintext(counter))
             await send_vendor_frame(frame)
             state["pre_control_sent"] = True
@@ -814,10 +854,16 @@ class Cuktech10UClient:
             _build_set_uint8_plaintext(counter, command.piid, command.marker, command.value),
         )
         _LOGGER.info(
-            "Sending CUKTECH property control piid=%s value=%s for %s",
-            command.piid,
-            command.value,
+            "Sending CUKTECH property control %s for %s",
+            _format_property_debug(command.piid, command.value),
             self._address,
+        )
+        _LOGGER.debug(
+            "CUKTECH control frame details for %s: counter=%s marker=%s payload_len=%s",
+            self._address,
+            counter,
+            command.marker.hex(),
+            len(frame),
         )
         await send_vendor_frame(frame)
 
@@ -832,10 +878,18 @@ class Cuktech10UClient:
 
         vendor_ready_event.clear()
         vendor_done_event.clear()
+        frame_counter = int.from_bytes(frame[2:4], "little") if len(frame) >= 4 else None
+        _LOGGER.debug(
+            "Starting CUKTECH vendor transaction for %s counter=%s frame_len=%s",
+            self._address,
+            frame_counter,
+            len(frame),
+        )
         await write_name("vendor_1a", bytes.fromhex("000000000100"))
 
         try:
             await asyncio.wait_for(vendor_ready_event.wait(), timeout=1.5)
+            _LOGGER.debug("CUKTECH vendor ready for %s counter=%s", self._address, frame_counter)
         except asyncio.TimeoutError:
             _LOGGER.debug(
                 "Timed out waiting for CUKTECH vendor ready for %s; sending frame anyway",
@@ -848,6 +902,7 @@ class Cuktech10UClient:
 
         try:
             await asyncio.wait_for(vendor_done_event.wait(), timeout=2.5)
+            _LOGGER.debug("CUKTECH vendor done ACK for %s counter=%s", self._address, frame_counter)
         except asyncio.TimeoutError:
             _LOGGER.debug("Timed out waiting for CUKTECH vendor done ACK for %s", self._address)
 
@@ -898,11 +953,16 @@ async def async_validate_auth(hass: HomeAssistant, address: str, token_hex: str)
 
         async def write_name(name: str, value: bytes) -> None:
             async with write_lock:
-                await _async_write_char(client, chars[name], value)
+                await _async_write_char(client, chars[name], value, name)
 
         async def on_notify(name: str, _sender: Any, data: bytearray) -> None:
             value = bytes(data)
-            _LOGGER.debug("CUKTECH validation notify %s: %s", name, value.hex())
+            _LOGGER.debug(
+                "CUKTECH validation notify %s len=%s value=%s",
+                name,
+                len(value),
+                _format_bytes(value),
+            )
             if name == "avdtp" and value.startswith(bytes.fromhex("000004")):
                 state["greeting_count"] += 1
                 greeting_event.set()

@@ -81,6 +81,13 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
         bit = PORT_BITS[port]
         current_mask = self._current_port_mask()
         new_mask = (current_mask | bit) if enabled else (current_mask & ~bit)
+        _LOGGER.debug(
+            "Setting CUKTECH port %s enabled=%s current_mask=0x%x new_mask=0x%x",
+            port,
+            enabled,
+            current_mask,
+            new_mask,
+        )
         self._expected_port_mask = new_mask
         self._expected_port_mask_until = monotonic() + _PORT_MASK_EXPECTED_TTL
         self._async_set_optimistic_property("port_ctl", new_mask)
@@ -150,6 +157,12 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
             incoming_mask = int(update_properties["port_ctl"]) & 0x0F
             expected_mask = self._expected_port_mask
             expected_active = expected_mask is not None and monotonic() < self._expected_port_mask_until
+            _LOGGER.debug(
+                "Received CUKTECH port_ctl update incoming=0x%x expected=%s active=%s",
+                incoming_mask,
+                f"0x{expected_mask:x}" if expected_mask is not None else None,
+                expected_active,
+            )
             if expected_active and incoming_mask == 0 and expected_mask != 0:
                 _LOGGER.debug(
                     "Ignoring CUKTECH port_ctl=0 while waiting for expected port mask 0x%x",
