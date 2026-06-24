@@ -131,8 +131,14 @@ class Cuktech10UCoordinator(DataUpdateCoordinator[CuktechUpdate]):
             sw_version=self.firmware_version,
         )
 
+    @property
+    def available(self) -> bool:
+        return self.connected and self.data is not None
+
     @callback
     def _async_handle_status(self, connected: bool) -> None:
+        if self.connected == connected:
+            return
         self.connected = connected
         self.async_update_listeners()
 

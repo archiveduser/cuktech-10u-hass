@@ -122,7 +122,7 @@ class Cuktech10USensor(CoordinatorEntity[Cuktech10UCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None
+        return self.coordinator.available
 
     @property
     def native_value(self) -> float | int | str | None:

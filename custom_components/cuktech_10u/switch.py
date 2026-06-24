@@ -66,7 +66,7 @@ class Cuktech10UPortSwitch(CoordinatorEntity[Cuktech10UCoordinator], SwitchEntit
 
     @property
     def available(self) -> bool:
-        return self.coordinator.connected and self.coordinator.data is not None
+        return self.coordinator.available
 
     @property
     def is_on(self) -> bool | None:

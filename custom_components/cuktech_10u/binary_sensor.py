@@ -98,7 +98,7 @@ class Cuktech10UBinarySensor(CoordinatorEntity[Cuktech10UCoordinator], BinarySen
 
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None
+        return self.coordinator.available
 
     @property
     def is_on(self) -> bool | None:
