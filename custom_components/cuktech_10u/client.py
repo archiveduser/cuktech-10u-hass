@@ -601,8 +601,9 @@ class Cuktech10UClient:
                 while not stop_event.is_set() and not disconnected_event.is_set() and client.is_connected:
                     stop_task = asyncio.create_task(stop_event.wait())
                     control_task = asyncio.create_task(self._control_queue.get())
+                    disconnected_task = asyncio.create_task(disconnected_event.wait())
                     done, pending = await asyncio.wait(
-                        {stop_task, control_task},
+                        {stop_task, control_task, disconnected_task},
                         timeout=self._refresh_interval if self._refresh_interval > 0 else None,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
@@ -611,7 +612,7 @@ class Cuktech10UClient:
                     for task in pending:
                         with suppress(asyncio.CancelledError):
                             await task
-                    if stop_task in done or stop_event.is_set() or disconnected_event.is_set() or not client.is_connected:
+                    if stop_task in done or disconnected_task in done or stop_event.is_set() or disconnected_event.is_set() or not client.is_connected:
                         break
                     if control_task in done:
                         command = control_task.result()
