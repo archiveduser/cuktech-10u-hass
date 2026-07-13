@@ -29,18 +29,23 @@
   "entity": {
     "sensor": {
       "total_power": { "name": "Total power" },
+      "total_energy": { "name": "Total energy" },
       "c1_power": { "name": "C1 power" },
       "c1_voltage": { "name": "C1 voltage" },
       "c1_current": { "name": "C1 current" },
+      "c1_energy": { "name": "C1 energy" },
       "c2_power": { "name": "C2 power" },
       "c2_voltage": { "name": "C2 voltage" },
       "c2_current": { "name": "C2 current" },
+      "c2_energy": { "name": "C2 energy" },
       "c3_power": { "name": "C3 power" },
       "c3_voltage": { "name": "C3 voltage" },
       "c3_current": { "name": "C3 current" },
+      "c3_energy": { "name": "C3 energy" },
       "a_power": { "name": "USB-A power" },
       "a_voltage": { "name": "USB-A voltage" },
-      "a_current": { "name": "USB-A current" }
+      "a_current": { "name": "USB-A current" },
+      "a_energy": { "name": "USB-A energy" }
     },
     "binary_sensor": {
       "c1_supplying_power": { "name": "C1 supplying power" },

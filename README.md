@@ -34,6 +34,7 @@ Copy `custom_components/cuktech_10u` into your Home Assistant `config/custom_com
 
 - Total power sensor
 - C1/C2/C3/USB-A power, voltage, and current sensors
+- Estimated cumulative output energy sensors for the total and each port
 - C1/C2/C3/USB-A output switches
 - USB-A low-current switch
 - Charging scene selector

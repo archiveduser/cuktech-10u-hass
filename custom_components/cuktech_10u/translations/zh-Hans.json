@@ -29,18 +29,23 @@
   "entity": {
     "sensor": {
       "total_power": { "name": "总功率" },
+      "total_energy": { "name": "总电量" },
       "c1_power": { "name": "C1 功率" },
       "c1_voltage": { "name": "C1 电压" },
       "c1_current": { "name": "C1 电流" },
+      "c1_energy": { "name": "C1 电量" },
       "c2_power": { "name": "C2 功率" },
       "c2_voltage": { "name": "C2 电压" },
       "c2_current": { "name": "C2 电流" },
+      "c2_energy": { "name": "C2 电量" },
       "c3_power": { "name": "C3 功率" },
       "c3_voltage": { "name": "C3 电压" },
       "c3_current": { "name": "C3 电流" },
+      "c3_energy": { "name": "C3 电量" },
       "a_power": { "name": "USB-A 功率" },
       "a_voltage": { "name": "USB-A 电压" },
-      "a_current": { "name": "USB-A 电流" }
+      "a_current": { "name": "USB-A 电流" },
+      "a_energy": { "name": "USB-A 电量" }
     },
     "binary_sensor": {
       "c1_supplying_power": { "name": "C1 正在供电" },
