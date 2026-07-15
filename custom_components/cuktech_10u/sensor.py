@@ -139,16 +139,29 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: Cuktech10UCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            Cuktech10USensor(coordinator, description)
-            for description in SENSOR_DESCRIPTIONS
-        ]
-        + [
-            Cuktech10UEnergySensor(coordinator, description)
-            for description in ENERGY_DESCRIPTIONS
-        ]
-    )
+    sensor_descriptions = {
+        description.key: description for description in SENSOR_DESCRIPTIONS
+    }
+    energy_descriptions = {
+        description.key: description for description in ENERGY_DESCRIPTIONS
+    }
+    # Keep each cumulative energy entity directly below its source power entity.
+    entities: list[SensorEntity] = [
+        Cuktech10USensor(coordinator, sensor_descriptions["total_power"]),
+        Cuktech10UEnergySensor(coordinator, energy_descriptions["total_energy"]),
+    ]
+    for port in ("c1", "c2", "c3", "a"):
+        entities.extend(
+            (
+                Cuktech10USensor(coordinator, sensor_descriptions[f"{port}_power"]),
+                Cuktech10UEnergySensor(
+                    coordinator, energy_descriptions[f"{port}_energy"]
+                ),
+                Cuktech10USensor(coordinator, sensor_descriptions[f"{port}_voltage"]),
+                Cuktech10USensor(coordinator, sensor_descriptions[f"{port}_current"]),
+            )
+        )
+    async_add_entities(entities)
 
 
 class Cuktech10USensor(CoordinatorEntity[Cuktech10UCoordinator], SensorEntity):
